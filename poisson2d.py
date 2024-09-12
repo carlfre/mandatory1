@@ -32,12 +32,27 @@ class Poisson2D:
 
     def create_mesh(self, N):
         """Create 2D mesh and store in self.xij and self.yij"""
-        # self.xij, self.yij ...
-        raise NotImplementedError
+        #TODO: check that should be 2D numpy array.
+        self.xij, self.yij = np.meshgrid(
+            np.linspace(0, self.L, N+1),
+            np.linspace(0, self.L, N+1)
+        )
 
     def D2(self):
         """Return second order differentiation matrix"""
-        raise NotImplementedError
+        m, n = self.xij.shape
+
+        # We build the matrix block by block
+        blocks = [[None for j in range(n)] for i in range(n)]
+
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    blocks[i][j] = sparse.diags([-1, 4, -1], [-1, 0, 1], (m, m))
+                elif i == j-1 or i == j+1:
+                    blocks[i][j] = -sparse.eye(m)
+
+        return sparse.block_array(blocks) # None blocks become zero matrix.
 
     def laplace(self):
         """Return vectorized Laplace operator"""
@@ -56,7 +71,7 @@ class Poisson2D:
         """Return l2-error norm"""
         raise NotImplementedError
 
-    def __call__(self, N):
+    def __call__(self, N: int) -> np.ndarray:
         """Solve Poisson's equation.
 
         Parameters
@@ -74,7 +89,7 @@ class Poisson2D:
         self.U = sparse.linalg.spsolve(A, b.flatten()).reshape((N+1, N+1))
         return self.U
 
-    def convergence_rates(self, m=6):
+    def convergence_rates(self, m: int = 6) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Compute convergence rates for a range of discretizations
 
         Parameters
@@ -100,7 +115,7 @@ class Poisson2D:
         r = [np.log(E[i-1]/E[i])/np.log(h[i-1]/h[i]) for i in range(1, m+1, 1)]
         return r, np.array(E), np.array(h)
 
-    def eval(self, x, y):
+    def eval(self, x: float, y: float) -> float:
         """Return u(x, y)
 
         Parameters
