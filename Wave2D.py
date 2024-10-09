@@ -5,6 +5,7 @@ import sympy as sp
 import scipy.sparse as sparse
 import matplotlib.pyplot as plt
 from matplotlib import cm
+import matplotlib.animation as animation
 
 x, y, t = sp.symbols('x,y,t')
 
@@ -55,6 +56,7 @@ class Wave2D:
         U0 = self.ue(self.xij, self.yij, 0)
         D = self.D2(N) / h**2
         U1 = U0 +  (c * dt)**2 / 2 * (D @ U0 + U0 @ D.T)
+        U1 = self.apply_bcs(U1)
         return U1, U0
 
     
@@ -204,4 +206,65 @@ def test_convergence_wave2d_neumann():
 
 
 def test_exact_wave2d():
-    raise NotImplementedError
+    sol = Wave2D()
+    r, E, h = sol.convergence_rates(mx=2, my=2, cfl = 1/np.sqrt(2))
+    for Ei in E:
+        assert Ei < 1e-12
+
+    solN = Wave2D_Neumann()
+    rN, EN, hN = solN.convergence_rates(mx=2, my=2, cfl = 1/np.sqrt(2))
+    for Ei in EN:
+        assert Ei < 1e-12
+
+
+
+
+def generate_animation(use_neumann_bc=False):
+
+    if use_neumann_bc:
+        sol = Wave2D_Neumann()
+        name = "Neumann"
+    else:
+        sol = Wave2D()
+        name = "Dirichlet"
+
+    N = 50
+    Nt = 100
+    cfl = 1/ np.sqrt(2)
+
+    my = 2
+    mx = 2
+    store_data = 1
+
+    data = sol(N, Nt, cfl=cfl, mx=mx, my=my, store_data=store_data)
+
+    xij, yij = sol.xij, sol.yij
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_zlim(-1, 1)
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('u')
+    
+
+    frames = sorted(data.keys())
+
+    surf = [ax.plot_surface(xij, yij, data[frames[0]], cmap='viridis')]
+
+    def update_plot(frame_number):
+        surf[0].remove()
+        surf[0] = ax.plot_surface(xij, yij, data[frame_number], cmap='viridis')
+        ax.set_title(name)
+        return surf[0],
+
+    ani = animation.FuncAnimation(
+        fig, update_plot, frames=frames, interval=50, blit=False
+    )
+
+    ani.save('wave_eq_animation_' + name + '.gif', writer='ffmpeg', fps=10)
+    plt.show()
+
+if __name__ == "__main__":
+    generate_animation(False)
+    generate_animation(True)
