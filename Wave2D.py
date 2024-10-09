@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import sympy as sp
 import scipy.sparse as sparse
@@ -10,23 +12,35 @@ class Wave2D:
 
     def create_mesh(self, N, sparse=False):
         """Create 2D mesh and store in self.xij and self.yij"""
-        # self.xji, self.yij = ...
-        raise NotImplementedError
+        self.xij, self.yij = np.meshgrid(
+            np.linspace(0, 1, N+1),
+            np.linspace(0, 1, N+1),
+            indexing='ij',
+            sparse=sparse
+        )
+        self.N = N
+        self.h = 1 / self.N
 
     def D2(self, N):
         """Return second order differentiation matrix"""
-        raise NotImplementedError
+        D = sparse.diags([1, -2, 1], [-1, 0, 1], (N+1, N+1), 'lil')
+        D[0, :4] = 2, -5, 4, -1
+        D[-1, -4:] = -1, 4, -5, 2
+        return D
 
     @property
     def w(self):
         """Return the dispersion coefficient"""
-        raise NotImplementedError
+        m = math.sqrt(self.mx**2 + self.my**2)
+        k = m * math.pi
+        return self.c * k        
 
-    def ue(self, mx, my):
+    def ue(self, x, y, t):
         """Return the exact standing wave"""
-        return sp.sin(mx*sp.pi*x)*sp.sin(my*sp.pi*y)*sp.cos(self.w*t)
+        mx, my, w = self.mx, self.my, self.w
+        return np.sin(mx*np.pi*x)*np.sin(my*np.pi*y)*np.cos(w*t)
 
-    def initialize(self, N, mx, my):
+    def initialize(self, N, mx, my, c, dt, h, sparse_mesh=False):
         r"""Initialize the solution at $U^{n}$ and $U^{n-1}$
 
         Parameters
@@ -36,13 +50,14 @@ class Wave2D:
         mx, my : int
             Parameters for the standing wave
         """
-        raise NotImplementedError
+        self.create_mesh(N, sparse=sparse_mesh)
+        
+        U0 = self.ue(self.xij, self.yij, 0)
+        D = self.D2(N) / h**2
+        U1 = U0 +  (c * dt)**2 / 2 * (D @ U0 + U0 @ D.T)
+        return U1, U0
 
-    @property
-    def dt(self):
-        """Return the time step"""
-        raise NotImplementedError
-
+    
     def l2_error(self, u, t0):
         """Return l2-error norm
 
@@ -53,10 +68,18 @@ class Wave2D:
         t0 : number
             The time of the comparison
         """
-        raise NotImplementedError
+        ue_evaluated = self.ue(self.xij, self.yij, t0)
+        return math.sqrt(self.h**2 * np.sum((u - ue_evaluated).flatten()**2))
 
-    def apply_bcs(self):
-        raise NotImplementedError
+    def apply_bcs(self, U):
+        box = np.zeros((self.N+1, self.N+1))
+        box[1:-1, 1:-1] = 1
+        return U * box
+
+    
+    def evolve(self, Un, Unm1, c, dt, N, h):
+        D = self.D2(N) / h**2
+        return 2 * Un - Unm1 + (c * dt)**2 * (D @ Un + Un @ D.T)
 
     def __call__(self, N, Nt, cfl=0.5, c=1.0, mx=3, my=3, store_data=-1):
         """Solve the wave equation
@@ -83,7 +106,33 @@ class Wave2D:
         If store_data > 0, then return a dictionary with key, value = timestep, solution
         If store_data == -1, then return the two-tuple (h, l2-error)
         """
-        raise NotImplementedError
+        h = 1 / N
+        dt = cfl * h / c
+        self.c, self.dt = c, dt
+        self.mx, self.my = mx, my
+        
+        U1, U0 = self.initialize(N, mx, my, c, dt, h)
+        if store_data == 1:
+            data = {0: U0, 1: U1}
+        elif store_data > 1:
+            data = {0: U0}
+
+        Un, Unm1 = U1, U0
+        errors = [self.l2_error(Ui, ti) for Ui, ti in zip([Unm1, Un], [0, dt])]
+        for n in range(1, Nt):
+            Unp1 = self.evolve(Un, Unm1, c, dt, N, h)
+            Unp1 = self.apply_bcs(Unp1)
+            errors.append(self.l2_error(Unp1, (n+1)*dt))
+
+            if store_data > 0 and (n+1) % store_data == 0:
+                data[n+1] = Unp1
+            Un, Unm1 = Unp1, Un
+
+
+        if store_data > 0:
+            return data
+        else:
+            return self.h, errors         
 
     def convergence_rates(self, m=4, cfl=0.1, Nt=10, mx=3, my=3):
         """Compute convergence rates for a range of discretizations
@@ -121,23 +170,38 @@ class Wave2D:
 class Wave2D_Neumann(Wave2D):
 
     def D2(self, N):
-        raise NotImplementedError
+        """Return second order differentiation matrix with Neumann boundary conditions"""
+        D = sparse.diags([1, -2, 1], [-1, 0, 1], shape=(N+1, N+1), format='lil')
 
-    def ue(self, mx, my):
-        raise NotImplementedError
+        # we use finite difference u'(0) \approx (u_1 - u_(-1)) /(2h), and set u'(0) = 0
+        # This gives u(-1) = u(1). Inserting into finite difference for u''(0) gives
+        D[0, 0:2] = -2, 2
 
-    def apply_bcs(self):
-        raise NotImplementedError
+        # Same for the right boundary
+        D[N, N-1:] = 2, -2
+
+        return D
+
+    def apply_bcs(self, U):
+        """boundary conditions are encoded in the matrix D2. This is just the identity."""
+        return U
+
+    def ue(self, x, y, t):
+        mx, my, w = self.mx, self.my, self.w
+        return np.cos(np.pi * mx * x ) * np.cos( np.pi * my * y) * np.cos(w*t) 
+
 
 def test_convergence_wave2d():
     sol = Wave2D()
     r, E, h = sol.convergence_rates(mx=2, my=3)
     assert abs(r[-1]-2) < 1e-2
 
+
 def test_convergence_wave2d_neumann():
     solN = Wave2D_Neumann()
     r, E, h = solN.convergence_rates(mx=2, my=3)
     assert abs(r[-1]-2) < 0.05
+
 
 def test_exact_wave2d():
     raise NotImplementedError
